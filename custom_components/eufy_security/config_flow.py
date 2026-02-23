@@ -170,7 +170,7 @@ class EufySecurityFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             config = Config(host=host, port=port)
             api_client: ApiClient = ApiClient(config, aiohttp_client.async_get_clientsession(self.hass), None)
             # Test the socket first!
-            await api_client.ws_connect()
+            #await api_client.ws_connect()
             # TODO: might need to add to each one of the condition
             #await api_client.disconnect()
 
@@ -184,6 +184,8 @@ class EufySecurityFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             except DriverNotConnectedException as exc:
                 return ValidationStatus.SOCKET_FAILED, {}
             except WebSocketConnectionException as exc:
+                _LOGGER.error(f"{DOMAIN} Exception in login : %s - traceback: %s", ex, traceback.format_exc())
+
                 return ValidationStatus.SOCKET_FAILED, {}
 
             return ValidationStatus.VALIDATED, {}
