@@ -171,7 +171,8 @@ class EufySecurityFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             api_client: ApiClient = ApiClient(config, aiohttp_client.async_get_clientsession(self.hass), None)
             # Test the socket first!
             await api_client.ws_connect()
-            await api_client.disconnect()
+            # TODO: might need to add to each one of the condition
+            #await api_client.disconnect()
 
             try:
                 await api_client.connect()
