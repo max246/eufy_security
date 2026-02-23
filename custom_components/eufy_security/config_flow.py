@@ -4,7 +4,7 @@ import traceback
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry
+from homeassistant.config_entries import SOURCE_REAUTH,SOURCE_USER, ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers import aiohttp_client
 import homeassistant.helpers.config_validation as cv
@@ -73,84 +73,122 @@ class EufySecurityFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._errors = {}
+        self._hostname = None
+        self._port = None
 
     async def async_step_user(self, user_input=None):
         _LOGGER.debug(f"{DOMAIN} async_step_user - {user_input} - {self.__dict__}")
         self._errors = {}
 
-        if self.source == SOURCE_REAUTH:
-            coordinator = self.hass.data[DOMAIN][COORDINATOR]
-            # Deal with mfa data
-            if coordinator.config.mfa_required is True:
-                mfa_input = user_input[ConfigField.mfa_input.name]
-                await coordinator.set_mfa_and_connect(mfa_input)
-            # Deal with captcha data
-            elif coordinator.config.captcha_required:
-                captcha_id = coordinator.config.captcha_id
-                captcha_input = user_input[ConfigField.captcha_input.name]
-                coordinator.config.captcha_id = None
-                coordinator.config.captcha_img = None
-                result_captcha = await coordinator.set_captcha_and_connect(captcha_id, captcha_input)
+        if self.source == SOURCE_USER:
+            if user_input is not None:
+                self._hostname = user_input[ConfigField.host.name],
+                self._port = user_input[ConfigField.port.name]
+                status, extra_data = await self._test_credentials(self._hostname, self._port)
+                _LOGGER.debug(f"{DOMAIN}  TESTT CREDS RESULT {status} {extra_data}")
 
-                _LOGGER.debug(f"{DOMAIN}  CAPTCHA SENT but returned this {result_captcha}")
-                if result_captcha is None:
-                    self._errors["base"] = "captcha"
-                    return await self._show_config_form(user_input)
-
-
-            else:
+                if status == ValidationStatus.VALIDATED:
+                    return self.async_create_entry(title=user_input[ConfigField.host.name], data=user_input)
+                elif status == ValidationStatus.CAPTCHA_REQUIRED:
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=vol.Schema(
+                            {
+                                vol.Required(ConfigField.captcha_input.name): str,
+                            }
+                        ),
+                        description_placeholders={
+                            "captcha_img": '<img id="eufy_security_captcha" src="' + extra_data['captcha_img'] + '"/>'},
+                    )
+                elif status == ValidationStatus.MFA_REQUIRED:
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=vol.Schema(
+                            {
+                                vol.Required(ConfigField.mfa_input.name): str,
+                            }
+                        ),
+                        description_placeholders={"captcha_img": 'Enter Multi Factor Authentication Code'},
+                    )
                 self._errors["base"] = "auth"
                 return await self._show_config_form(user_input)
 
 
-            config_entry_id = None
-            for entry in self._async_current_entries():
-                config_entry_id = entry.entry_id
 
-            async def try_reloading(_now):
-                _LOGGER.debug(f"{DOMAIN} try_reloading start after captcha/mfa")
-                await coordinator.disconnect()
-                self.hass.data[DOMAIN] = {}
-                await self.hass.config_entries.async_reload(config_entry_id)
-                _LOGGER.debug(f"{DOMAIN} try_reloading finish after captcha/mfa")
+        # if self.source == SOURCE_REAUTH:
+        #     coordinator = self.hass.data[DOMAIN][COORDINATOR]
+        #     # Deal with mfa data
+        #     if coordinator.config.mfa_required is True:
+        #         mfa_input = user_input[ConfigField.mfa_input.name]
+        #         await coordinator.set_mfa_and_connect(mfa_input)
+        #     # Deal with captcha data
+        #     elif coordinator.config.captcha_required:
+        #         captcha_id = coordinator.config.captcha_id
+        #         captcha_input = user_input[ConfigField.captcha_input.name]
+        #         coordinator.config.captcha_id = None
+        #         coordinator.config.captcha_img = None
+        #         result_captcha = await coordinator.set_captcha_and_connect(captcha_id, captcha_input)
+        #
+        #         _LOGGER.debug(f"{DOMAIN}  CAPTCHA SENT but returned this {result_captcha}")
+        #         if result_captcha is None:
+        #             self._errors["base"] = "captcha"
+        #             return await self._show_config_form(user_input)
+        #
+        #
+        #     else:
+        #         self._errors["base"] = "auth"
+        #         return await self._show_config_form(user_input)
+        #
+        #
+        #     config_entry_id = None
+        #     for entry in self._async_current_entries():
+        #         config_entry_id = entry.entry_id
+        #
+        #     async def try_reloading(_now):
+        #         _LOGGER.debug(f"{DOMAIN} try_reloading start after captcha/mfa")
+        #         await coordinator.disconnect()
+        #         self.hass.data[DOMAIN] = {}
+        #         await self.hass.config_entries.async_reload(config_entry_id)
+        #         _LOGGER.debug(f"{DOMAIN} try_reloading finish after captcha/mfa")
+        #
+        #     async_call_later(self.hass, 3, try_reloading)
+        #     return self.async_abort(reason="reauth_successful")
 
-            async_call_later(self.hass, 3, try_reloading)
-            return self.async_abort(reason="reauth_successful")
-
-
-        if self._async_current_entries():
-            return self.async_abort(reason="single_instance_allowed")
-
-        if user_input is not None:
-            status, extra_data = await self._test_credentials(user_input[ConfigField.host.name], user_input[ConfigField.port.name])
-
-            _LOGGER.debug(f"{DOMAIN}  TESTT CREDS RESULT {status} {extra_data}")
-            if status == ValidationStatus.VALIDATED:
-                return self.async_create_entry(title=user_input[ConfigField.host.name], data=user_input)
-            elif status == ValidationStatus.CAPTCHA_REQUIRED:
-                return self.async_show_form(
-                    step_id="reauth_confirm",
-                    data_schema=vol.Schema(
-                        {
-                            vol.Required(ConfigField.captcha_input.name): str,
-                        }
-                    ),
-                    description_placeholders={
-                        "captcha_img": '<img id="eufy_security_captcha" src="' + extra_data['captcha_img'] + '"/>'},
-                )
-            elif status == ValidationStatus.MFA_REQUIRED:
-                return self.async_show_form(
-                    step_id="reauth_confirm",
-                    data_schema=vol.Schema(
-                        {
-                            vol.Required(ConfigField.mfa_input.name): str,
-                        }
-                    ),
-                    description_placeholders={"captcha_img": 'Enter Multi Factor Authentication Code'},
-                )
-            self._errors["base"] = "auth"
-            return await self._show_config_form(user_input)
-
+        #
+        # if self._async_current_entries():
+        #     return self.async_abort(reason="single_instance_allowed")
+        #
+        # if user_input is not None:
+        #     status, extra_data = await self._test_credentials(user_input[ConfigField.host.name], user_input[ConfigField.port.name])
+        #
+        #     _LOGGER.debug(f"{DOMAIN}  TESTT CREDS RESULT {status} {extra_data}")
+        #     if status == ValidationStatus.VALIDATED:
+        #         return self.async_create_entry(title=user_input[ConfigField.host.name], data=user_input)
+        #     elif status == ValidationStatus.CAPTCHA_REQUIRED:
+        #         return self.async_show_form(
+        #             step_id="reauth_confirm",
+        #             data_schema=vol.Schema(
+        #                 {
+        #                     vol.Required(ConfigField.captcha_input.name): str,
+        #                 }
+        #             ),
+        #             description_placeholders={
+        #                 "captcha_img": '<img id="eufy_security_captcha" src="' + extra_data['captcha_img'] + '"/>'},
+        #         )
+        #     elif status == ValidationStatus.MFA_REQUIRED:
+        #         return self.async_show_form(
+        #             step_id="reauth_confirm",
+        #             data_schema=vol.Schema(
+        #                 {
+        #                     vol.Required(ConfigField.mfa_input.name): str,
+        #                 }
+        #             ),
+        #             description_placeholders={"captcha_img": 'Enter Multi Factor Authentication Code'},
+        #         )
+        #     self._errors["base"] = "auth"
+        #     return await self._show_config_form(user_input)
+        #
+        self._errors["base"] = "auth"
         return await self._show_config_form(user_input)
 
     async def _show_config_form(self, user_input):  # pylint: disable=unused-argument
