@@ -39,6 +39,7 @@ class EufySecurityDataUpdateCoordinator(DataUpdateCoordinator):
         try:
             await self._api.connect()
         except CaptchaRequiredException as exc:
+            self.config.captcha_required = True
             self.config.captcha_id = exc.captcha_id
             self.config.captcha_img = exc.captcha_img
             raise ConfigEntryAuthFailed() from exc
@@ -69,9 +70,9 @@ class EufySecurityDataUpdateCoordinator(DataUpdateCoordinator):
         """set mfa and connect"""
         await self._api.set_mfa_and_connect(mfa_input)
 
-    async def set_captcha_and_connect(self, captcha_id: str, captcha_input: str):
+    async def set_captcha_and_connect(self, captcha_id: str, captcha_input: str) -> dict | None:
         """set captcha and connect"""
-        await self._api.set_captcha_and_connect(captcha_id, captcha_input)
+        return await self._api.set_captcha_and_connect(captcha_id, captcha_input)
 
     async def send_message(self, message: str) -> None:
         """send message to websocket api"""

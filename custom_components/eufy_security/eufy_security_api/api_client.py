@@ -129,11 +129,13 @@ class ApiClient:
             response[serial_no] = product
         return response
 
-    async def set_captcha_and_connect(self, captcha_id: str, captcha_input: str):
+    async def set_captcha_and_connect(self, captcha_id: str, captcha_input: str) -> dict | None:
         """Set captcha set products"""
-        await self._set_captcha(captcha_id, captcha_input)
-        await asyncio.sleep(30)
+        result = await self._set_captcha(captcha_id, captcha_input)
+        # await asyncio.sleep(10)
         # await self._set_products()
+        return result
+
 
     async def set_mfa_and_connect(self, mfa_input: str):
         """Set mfa code set products"""
@@ -163,8 +165,8 @@ class ApiClient:
         """Poll cloud data for latest changes"""
         await self._send_message_get_response(OutgoingMessage(OutgoingMessageType.poll_refresh))
 
-    async def _set_captcha(self, captcha_id: str, captcha_input: str) -> None:
-        await self._send_message_get_response(OutgoingMessage(OutgoingMessageType.set_captcha, captcha_id=captcha_id, captcha_input=captcha_input))
+    async def _set_captcha(self, captcha_id: str, captcha_input: str) -> dict | None:
+        return await self._send_message_get_response(OutgoingMessage(OutgoingMessageType.set_captcha, captcha_id=captcha_id, captcha_input=captcha_input))
 
     async def _set_mfa_code(self, mfa_input: str) -> None:
         await self._send_message_get_response(OutgoingMessage(OutgoingMessageType.set_verify_code, verify_code=mfa_input))
@@ -337,7 +339,7 @@ class ApiClient:
         _LOGGER.error(f"on_error - {error}")
         raise WebSocketConnectionException(error)
 
-    async def _send_message_get_response(self, message: OutgoingMessage) -> dict:
+    async def _send_message_get_response(self, message: OutgoingMessage) -> dict | None:
         future: "asyncio.Future[dict]" = asyncio.get_event_loop().create_future()
         self._result_futures[message.id] = future
         await self.send_message(message.content)
@@ -345,6 +347,7 @@ class ApiClient:
             return await future
         finally:
             self._result_futures.pop(message.id)
+        return None
 
     async def send_message(self, message: dict) -> None:
         """send message to websocket api"""

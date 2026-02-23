@@ -12,11 +12,25 @@ from homeassistant.helpers.event import async_call_later
 
 from .const import COORDINATOR, DOMAIN
 from .eufy_security_api.api_client import ApiClient
-from .eufy_security_api.exceptions import WebSocketConnectionException
 from .model import Config, ConfigField
-
+from .eufy_security_api.exceptions import (
+    CaptchaRequiredException,
+    DriverNotConnectedException,
+    MultiFactorCodeRequiredException,
+    WebSocketConnectionException,
+)
 _LOGGER = logging.getLogger(__name__)
 
+
+from enum import Enum
+
+class ValidationStatus(Enum):
+    VALIDATED = 1
+    CAPTCHA_REQUIRED = 2
+    CAPTCHA_PASSED = 3
+    MFA_REQUIRED = 4
+    MFA_PASSED = 5
+    SOCKET_FAILED = 6
 
 class EufySecurityOptionFlowHandler(config_entries.OptionsFlow):
     """Option flow handler for integration"""
@@ -66,15 +80,28 @@ class EufySecurityFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         if self.source == SOURCE_REAUTH:
             coordinator = self.hass.data[DOMAIN][COORDINATOR]
+            # Deal with mfa data
             if coordinator.config.mfa_required is True:
                 mfa_input = user_input[ConfigField.mfa_input.name]
                 await coordinator.set_mfa_and_connect(mfa_input)
-            else:
+            # Deal with captcha data
+            elif coordinator.config.captcha_required:
                 captcha_id = coordinator.config.captcha_id
                 captcha_input = user_input[ConfigField.captcha_input.name]
                 coordinator.config.captcha_id = None
                 coordinator.config.captcha_img = None
-                await coordinator.set_captcha_and_connect(captcha_id, captcha_input)
+                result_captcha = await coordinator.set_captcha_and_connect(captcha_id, captcha_input)
+
+                _LOGGER.debug(f"{DOMAIN}  CAPTCHA SENT but returned this {result_captcha}")
+                if result_captcha is None:
+                    self._errors["base"] = "captcha"
+                    return await self._show_config_form(user_input)
+
+
+            else:
+                self._errors["base"] = "auth"
+                return await self._show_config_form(user_input)
+
 
             config_entry_id = None
             for entry in self._async_current_entries():
@@ -95,9 +122,32 @@ class EufySecurityFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="single_instance_allowed")
 
         if user_input is not None:
-            valid = await self._test_credentials(user_input[ConfigField.host.name], user_input[ConfigField.port.name])
-            if valid:
+            status, extra_data = await self._test_credentials(user_input[ConfigField.host.name], user_input[ConfigField.port.name])
+
+            _LOGGER.debug(f"{DOMAIN}  TESTT CREDS RESULT {status} {extra_data}")
+            if status == ValidationStatus.VALIDATED:
                 return self.async_create_entry(title=user_input[ConfigField.host.name], data=user_input)
+            elif status == ValidationStatus.CAPTCHA_REQUIRED:
+                return self.async_show_form(
+                    step_id="reauth_confirm",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(ConfigField.captcha_input.name): str,
+                        }
+                    ),
+                    description_placeholders={
+                        "captcha_img": '<img id="eufy_security_captcha" src="' + extra_data['captcha_img'] + '"/>'},
+                )
+            elif status == ValidationStatus.MFA_REQUIRED:
+                return self.async_show_form(
+                    step_id="reauth_confirm",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(ConfigField.mfa_input.name): str,
+                        }
+                    ),
+                    description_placeholders={"captcha_img": 'Enter Multi Factor Authentication Code'},
+                )
             self._errors["base"] = "auth"
             return await self._show_config_form(user_input)
 
@@ -115,16 +165,31 @@ class EufySecurityFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             errors=self._errors,
         )
 
-    async def _test_credentials(self, host, port):  # pylint: disable=unused-argument
+    async def _test_credentials(self, host, port) -> tuple[ValidationStatus, dict]:  # pylint: disable=unused-argument
         try:
             config = Config(host=host, port=port)
             api_client: ApiClient = ApiClient(config, aiohttp_client.async_get_clientsession(self.hass), None)
+            # Test the socket first!
             await api_client.ws_connect()
             await api_client.disconnect()
-            return True
+
+            try:
+                await self._api.connect()
+            except CaptchaRequiredException as exc:
+                return ValidationStatus.CAPTCHA_REQUIRED, {"captcha_id": exc.captcha_id, "captcha_img": exc.captcha_img}
+            except MultiFactorCodeRequiredException as exc:
+                # todo: return the number and id!
+                return ValidationStatus.MFA_REQUIRED, {"mfa_required": exc}
+            except DriverNotConnectedException as exc:
+                return ValidationStatus.SOCKET_FAILED, {}
+            except WebSocketConnectionException as exc:
+                return ValidationStatus.SOCKET_FAILED, {}
+
+            return ValidationStatus.VALIDATED, {}
         except WebSocketConnectionException as ex:  # pylint: disable=broad-except
             _LOGGER.error(f"{DOMAIN} Exception in login : %s - traceback: %s", ex, traceback.format_exc())
-        return False
+
+        return ValidationStatus.SOCKET_FAILED, {}
 
     async def async_step_reauth(self, user_input=None):
         """initialize captcha flow"""

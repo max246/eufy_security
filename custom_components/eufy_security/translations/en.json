@@ -18,7 +18,8 @@
       }
     },
     "error": {
-      "auth": "Host/Port is wrong."
+      "auth": "Host/Port is wrong.",
+      "captcha": "Failure to confirm Captcha, try again"
     },
     "abort": {
       "single_instance_allowed": "Only a single instance is allowed.",
