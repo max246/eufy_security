@@ -174,7 +174,7 @@ class EufySecurityFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             await api_client.disconnect()
 
             try:
-                await self._api.connect()
+                await api_client.connect()
             except CaptchaRequiredException as exc:
                 return ValidationStatus.CAPTCHA_REQUIRED, {"captcha_id": exc.captcha_id, "captcha_img": exc.captcha_img}
             except MultiFactorCodeRequiredException as exc:
